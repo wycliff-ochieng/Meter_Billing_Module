@@ -47,37 +47,21 @@ in a chain of readings for that partner-product pair.
 
 ### First invoice -- baseline reading
 
-```
-Invoice: INV-001  |  Customer: Greenfield Industries
-------------------------------------------------------
-Product          | Serial   | Prev | New    | Actual | Qty     | Price  | Total
-Water Consumption| W-99821  | 0.00 | 1250.00| 1250.00| 1250.00 | 3.50   | 4,375.00
-```
+![First invoice - baseline reading with Previous=0 and New=1250](assets/screenshots/invoice_first.png)
 
 *No prior reading exists, so Previous = 0.00. New = 1250.00 produces
 Actual = 1250.00, Quantity = 1250.00, Subtotal = 4,375.00.*
 
 ### Second invoice -- automatic Previous fetch
 
-```
-Invoice: INV-002  |  Customer: Greenfield Industries
-------------------------------------------------------
-Product          | Serial   | Prev   | New   | Actual | Qty   | Price  | Total
-Water Consumption| W-99821  | 1250.00|1380.00| 130.00 |130.00 | 3.50   | 455.00
-```
+![Second invoice - Previous auto-populated from INV-001](assets/screenshots/invoice_second.png)
 
 *Previous auto-populated to 1250.00 (from INV-001). New = 1380.00 produces
 Actual = 130.00, Quantity = 130.00, Subtotal = 455.00.*
 
 ### Multi-product isolation
 
-```
-Invoice: INV-003  |  Customer: Greenfield Industries
-------------------------------------------------------
-Product          | Serial   | Prev   | New   | Actual | Qty   | Price  | Total
-Water Consumption| W-99821  | 1380.00|1450.00| 70.00  | 70.00 | 3.50   | 245.00
-Electricity Cons.| E-44351  | 0.00   |850.00 | 850.00 |850.00 | 0.20   | 170.00
-```
+![Third invoice - Water and Electricity tracking independent readings](assets/screenshots/invoice_multi_product.png)
 
 *Each product tracks its own reading chain. Electricity has no prior invoice
 so Previous = 0.00, isolated from Water's history.*
