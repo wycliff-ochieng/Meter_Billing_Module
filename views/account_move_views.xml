@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_move_form_inherit_meter_reading" model="ir.ui.view">
+        <field name="name">account.move.form.inherit.meter.reading</field>
+        <field name="model">account.move</field>
+        <field name="inherit_id" ref="account.view_move_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='invoice_line_ids']/list/field[@name='product_id']" position="after">
+                <field name="product_is_metered" invisible="1"/>
+                <field name="meter_serial" optional="show" invisible="not product_is_metered"/>
+                <field name="meter_previous" optional="show" invisible="not product_is_metered"/>
+                <field name="meter_new" invisible="not product_is_metered"/>
+                <field name="meter_actual" optional="show" invisible="not product_is_metered"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>
