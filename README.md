@@ -3,39 +3,39 @@
 [![Odoo](https://img.shields.io/badge/Odoo-19.0-714b67?logo=odoo)](https://www.odoo.com)
 [![License](https://img.shields.io/badge/license-LGPL--3-blue)](__manifest__.py)
 
-Adds meter-reading columns (Previous, New, Actual) to invoice lines and
-automatically maps the computed consumption to the standard Quantity field.
-Designed for utility, water, electricity, or gas billing workflows where
+Adds meter-reading columns (Previous, New, Actual, Meter Serial) to invoice
+lines and automatically maps the computed consumption to the standard Quantity
+field. Designed for utility, water, electricity, or gas billing workflows where
 charges are based on meter differential rather than discrete units.
 
 ## Table of Contents
 
-- [Overview](#4-overview)
-- [Quick Start](#5-quick-start)
-- [Architecture & Design Decisions](#6-architecture--design-decisions)
-- [Complete Processing Flow](#7-complete-processing-flow)
-- [API Reference](#8-api-reference)
-- [Model / Audit Log](#9-model--audit-log)
-- [Error Scenarios & Recovery](#10-error-scenarios--recovery)
-- [Configuration](#11-configuration)
-- [Sandbox Testing](#12-sandbox-testing)
-- [Security](#13-security)
-- [Dependencies](#14-dependencies)
-- [Installation](#15-installation)
-- [Performance Characteristics](#16-performance-characteristics)
-- [Development & Testing](#17-development--testing)
-- [Troubleshooting](#18-troubleshooting)
-- [License](#19-license)
+- [Overview](#overview)
+- [Screenshots](#screenshots)
+- [Quick Start](#quick-start)
+- [Architecture & Design Decisions](#architecture--design-decisions)
+- [Complete Processing Flow](#complete-processing-flow)
+- [Model / Audit Log](#model--audit-log)
+- [Error Scenarios & Recovery](#error-scenarios--recovery)
+- [Configuration](#configuration)
+- [Security](#security)
+- [Dependencies](#dependencies)
+- [Installation](#installation)
+- [Development & Testing](#development--testing)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
 
 ## Overview
 
 | Capability | How it works |
-|---|---|---|
+|---|---|
 | Historical meter lookup | `meter_previous` searches last posted invoice for same partner+product |
 | Current reading entry | `meter_new` is an editable float stored on the invoice line |
 | Automatic consumption | `meter_actual` = new - previous, floored at 0 |
 | Quantity sync | `meter_actual` written to `quantity` so subtotals reflect usage |
-| PDF report columns | Previous, New, Actual columns render before Quantity in invoice PDF |
+| Meter serial tracking | `meter_serial` records physical meter identifier per line |
+| Product gating | `is_metered` flag on products hides meter columns for non-utility items |
+| PDF report columns | Meter Serial, Previous, New, Actual columns render before Quantity |
 
 This module is for businesses that bill based on meter readings -- utility
 companies, property managers, co-working spaces, or any recurring service
@@ -43,27 +43,99 @@ where consumption is measured at interval endpoints. The module does **not**
 add an independent meter registry; it treats each invoice line as a snapshot
 in a chain of readings for that partner-product pair.
 
+## Screenshots
+
+### First invoice -- baseline reading
+
+```
+Invoice: INV-001  |  Customer: Greenfield Industries
+------------------------------------------------------
+Product          | Serial   | Prev | New    | Actual | Qty     | Price  | Total
+Water Consumption| W-99821  | 0.00 | 1250.00| 1250.00| 1250.00 | 3.50   | 4,375.00
+```
+
+*No prior reading exists, so Previous = 0.00. New = 1250.00 produces
+Actual = 1250.00, Quantity = 1250.00, Subtotal = 4,375.00.*
+
+### Second invoice -- automatic Previous fetch
+
+```
+Invoice: INV-002  |  Customer: Greenfield Industries
+------------------------------------------------------
+Product          | Serial   | Prev   | New   | Actual | Qty   | Price  | Total
+Water Consumption| W-99821  | 1250.00|1380.00| 130.00 |130.00 | 3.50   | 455.00
+```
+
+*Previous auto-populated to 1250.00 (from INV-001). New = 1380.00 produces
+Actual = 130.00, Quantity = 130.00, Subtotal = 455.00.*
+
+### Multi-product isolation
+
+```
+Invoice: INV-003  |  Customer: Greenfield Industries
+------------------------------------------------------
+Product          | Serial   | Prev   | New   | Actual | Qty   | Price  | Total
+Water Consumption| W-99821  | 1380.00|1450.00| 70.00  | 70.00 | 3.50   | 245.00
+Electricity Cons.| E-44351  | 0.00   |850.00 | 850.00 |850.00 | 0.20   | 170.00
+```
+
+*Each product tracks its own reading chain. Electricity has no prior invoice
+so Previous = 0.00, isolated from Water's history.*
+
 ## Quick Start
 
-1. **Install the module** -- Apps > Update Apps List > Install "Account Meter
+1. **Set up products** -- Go to Products, open a product, check **Is Metered**.
+2. **Install the module** -- Apps > Update Apps List > Install "Account Meter
    Billing".
-2. **Create a customer invoice** -- Accounting > Customers > Invoices > Create.
-3. **Add an invoice line** -- pick a product that represents a metered service
-   (e.g., "Water - per m3").
-4. **Enter the New reading** -- type a value in the `New` column. The
-   `Previous` and `Actual` fields update automatically.
-5. **Post the invoice** -- the reading is saved. On the next invoice for the
+3. **Create a customer invoice** -- Accounting > Customers > Invoices > Create.
+4. **Add an invoice line** -- pick a metered product (e.g., "Water - per m3").
+5. **Enter the New reading** -- type a value in the `New` column and optionally
+   the meter serial. `Previous` and `Actual` update automatically.
+6. **Post the invoice** -- the reading is saved. On the next invoice for the
    same partner and product, `Previous` populates from this invoice's `New`.
 
 ## Architecture & Design Decisions
 
+### Why place meter fields on invoice lines instead of the invoice header
+
+The three meter fields (`meter_previous`, `meter_new`, `meter_actual`) are
+added to `account.move.line` rather than `account.move` for three reasons:
+
+**1. Support for Multiple Meters on a Single Invoice**
+
+A customer may be billed for multiple metered services on the same monthly
+invoice (e.g., both Water and Electricity consumption). At the header level
+you could only record one meter reading. On invoice lines, a single invoice
+can have one line for Water and another for Electricity, each tracking
+independent readings.
+
+**2. Direct Integration with Odoo's Pricing Engine**
+
+Odoo's pricing, tax, and subtotal calculations happen at the line level:
+`Line Subtotal = Quantity x Unit Price`. Because the requirement specifies
+that the billable Quantity must be derived from Actual usage, both the meter
+fields and the standard quantity field must reside on the same model so they
+can interact dynamically through computed field dependencies.
+
+**3. Accurate Historical Lookup Per Product**
+
+When looking up the Previous reading, the system must find the last reading
+for that specific service. Line-level tracking allows per-product matching
+(e.g., matching the previous Water line to the new Water line while ignoring
+Electricity lines). At the header level there is no product identity to
+match against.
+
 ### Why store computed fields instead of computing on the fly
 
-`meter_previous` and `meter_actual` are both `compute=True, store=True`.
+```python
+meter_previous = fields.Float(compute='_compute_meter_previous', store=True)
+meter_actual = fields.Float(compute='_compute_meter_actual', store=True)
+```
+
 Storing means the values survive recomputation and are available in SQL
 reports, search domains, and the PDF renderer without re-running the search
-query every time. The tradeoff is slightly higher database storage -- three
-extra floats per invoice line -- which is negligible for the vast majority of
+query every time. The tradeoff is slightly higher database storage -- four
+extra fields per invoice line -- which is negligible for the vast majority of
 Odoo deployments.
 
 ### Why map `meter_actual` to `quantity` inside the compute method
@@ -77,10 +149,10 @@ def _compute_meter_actual(self):
         line.quantity = actual
 ```
 
-Writing `line.quantity = actual` inside the `_compute_meter_actual` method
-means that every price, tax, and subtotal computation works automatically --
-no need to override `_compute_price` or modify the `account.move` validation
-logic. The quantity is the actual consumption, so the line total becomes
+Writing `line.quantity = actual` inside the compute method means that every
+price, tax, and subtotal computation works automatically -- no need to
+override `_compute_price` or modify the `account.move` validation logic.
+The quantity is the actual consumption, so the line total becomes
 `actual * unit_price`. This is the least-surprise path for Odoo's existing
 accounting pipeline.
 
@@ -107,6 +179,49 @@ A partner may receive both customer invoices (`out_invoice`) and vendor bills
 (`in_invoice`). Restricting the search to the same `move_type` prevents a
 vendor bill reading from leaking into a customer invoice's `Previous` field.
 
+### Why an "Is Metered?" flag on products
+
+In real-world usage, not all invoice lines are metered -- administrative fees,
+consulting charges, and flat-rate services should not show meter columns.
+Adding a boolean `is_metered` to `product.template` allows selective
+visibility:
+
+```python
+product_is_metered = fields.Boolean(related='product_id.is_metered')
+```
+
+The meter fields in the invoice line list use
+`invisible="not product_is_metered"`, keeping the UI clean for non-metered
+products.
+
+### Why a validation constraint on meter readings
+
+A physical meter cannot go backwards. If a user accidentally enters a New
+reading lower than Previous, the system should catch the mistake before the
+invoice is saved or posted:
+
+```python
+@api.constrains('meter_new', 'meter_previous')
+def _check_meter_readings(self):
+    for line in self:
+        if line.meter_previous and line.meter_new < line.meter_previous:
+            raise ValidationError(
+                f"For product '{line.product_id.name}', the New reading "
+                f"({line.meter_new}) cannot be less than the Previous "
+                f"reading ({line.meter_previous})."
+            )
+```
+
+This raises a user-facing warning on save, preventing data entry errors.
+
+### Why meter serial tracking
+
+Utility customers often have specific physical meters installed on their
+properties (e.g., "Serial No: W-99821"). Recording the serial on the
+invoice line provides audit clarity and helps customers identify which
+meter a reading belongs to, especially when multiple meters of the same
+product type exist at one location.
+
 ## Complete Processing Flow
 
 ### Flow A -- Invoice line creation / editing
@@ -116,7 +231,7 @@ User selects product and partner
   │
   ├── _compute_meter_previous fires
   │     ├── domain: same partner, same product, posted, same move_type
-  │     ├── order by invoice_date desc, id desc
+  │     ├── order by id desc
   │     ├── limit 1
   │     └── meter_previous = result.meter_new or 0.0
   │
@@ -125,10 +240,15 @@ User selects product and partner
   │           ├── meter_actual = max(meter_new - meter_previous, 0.0)
   │           └── quantity = meter_actual
   │
-  └── Invoice posted
-        └── move_id.state -> 'posted'
-              └── This line becomes the "previous" source
-                    for the next identical partner+product invoice
+  └── User clicks Save
+        └── _check_meter_readings validates
+              ├── if meter_new < meter_previous: ValidationError raised
+              └── if valid: record saved
+
+On invoice post:
+  └── move_id.state -> 'posted'
+        └── This line becomes the "previous" source
+              for the next identical partner+product invoice
 ```
 
 Steps:
@@ -141,11 +261,16 @@ Steps:
    has `meter_new > 0`.
 4. The found line's `meter_new` is copied to the current line's
    `meter_previous`. If no prior line exists, `meter_previous` is 0.
-5. User types a value into `meter_new`.
+5. User types a value into `meter_new` and optionally sets `meter_serial`.
 6. `_compute_meter_actual` runs: `actual = max(new - previous, 0)`. Both
    `meter_actual` and `quantity` are set to this value.
-7. Subtotal, tax, and total are recomputed by the standard `account.move`
+7. On save, `_check_meter_readings` validates that `meter_new >= meter_previous`
+   when `meter_previous` is non-zero. If validation fails, a user-facing error
+   is shown.
+8. Subtotal, tax, and total are recomputed by the standard `account.move`
    pipeline using the updated `quantity`.
+9. After posting, the line becomes the source for the next invoice's
+   `meter_previous` lookup.
 
 ### Flow B -- PDF report rendering
 
@@ -153,27 +278,18 @@ Steps:
 Invoice print action
   │
   └── account.report_invoice_document rendered
-        ├── th line: "Previous" | "New" | "Actual" | "Quantity"
-        └── td line: line.meter_previous | line.meter_new
-                     | line.meter_actual | line.quantity
+        ├── th line: "Meter Serial" | "Previous" | "New" | "Actual" | "Quantity"
+        └── td line: line.meter_serial | line.meter_previous
+                     | line.meter_new | line.meter_actual | line.quantity
 ```
 
 Steps:
 
 1. User clicks Print > Invoice on a posted invoice.
 2. Odoo renders the QWeb template `account.report_invoice_document`.
-3. The two xpath insertions add three `<th>` elements before `th_quantity` and
-   three `<td>` elements before `td_quantity`.
+3. The two xpath insertions add four `<th>` elements and four `<td>` elements
+   before the quantity column.
 4. Each cell is populated via `t-field` on the `line` record.
-
-## API Reference
-
-Not applicable. This module has **no HTTP controllers**, no REST endpoints,
-and no webhook listeners. All behavior is triggered through Odoo's standard
-model layer (field computes, view inheritance, QWeb template inheritance).
-
-Integrators interact with the module entirely through Odoo's ORM and UI --
-either via the web client or through `models.env` in server-side code.
 
 ## Model / Audit Log
 
@@ -184,6 +300,8 @@ either via the web client or through `models.env` in server-side code.
 | `meter_previous` | `Float` (computed, stored) | Last reading from prior posted invoice, same partner+product |
 | `meter_new` | `Float` (editable, stored) | Reading entered for the current billing cycle |
 | `meter_actual` | `Float` (computed, stored) | Net consumption = new - previous, floored at 0 |
+| `meter_serial` | `Char` | Physical meter serial number / reference |
+| `product_is_metered` | `Boolean` (related) | Mirrors `product.template.is_metered`, used for column visibility |
 
 **Key methods:**
 
@@ -191,37 +309,49 @@ either via the web client or through `models.env` in server-side code.
 |---|---|---|
 | `_compute_meter_previous` | `(self)` | Finds latest posted `meter_new` for same partner, product, move_type |
 | `_compute_meter_actual` | `(self)` | Sets `meter_actual` and `quantity` to `max(new - previous, 0)` |
+| `_check_meter_readings` | `(self)` | Validates `meter_new >= meter_previous`, raises `ValidationError` if violated |
 
-**Constraints:** None. The module does not add any SQL or Python constraints.
+**Constraints:**
+
+| Type | Definition |
+|---|---|
+| Python constraint | `meter_new` must be >= `meter_previous` when `meter_previous > 0`. Raises `ValidationError` with product name and values on violation. |
+
+### `product.template` (inherited)
+
+| Field | Type | Purpose |
+|---|---|---|
+| `is_metered` | `Boolean` | When checked, invoice lines for this product show meter reading columns |
 
 ## Error Scenarios & Recovery
 
 | Scenario | What happens | Recovery |
 |---|---|---|
 | No prior invoice exists | `meter_previous` = 0.0; `meter_actual` = `meter_new` | Correct -- first invoice has no prior |
-| `meter_new` < `meter_previous` | `meter_actual` = 0.0 (negative floored) | Verify reading. Zero via prior invoice if meter was reset |
+| `meter_new` < `meter_previous` | `_check_meter_readings` raises `ValidationError` on save | Verify the reading. If meter was reset, zero `meter_previous` via a prior invoice |
 | Prior invoice in draft | `meter_previous` = 0.0 (needs `state=posted`) | Post prior invoice, re-save current line |
 | Same product, diff move_type | `move_type` filter prevents vendor bills leaking into customer invoices | No action needed |
 | Invoice line deleted after posting | Deleted line unavailable as prior source | Keep one posted invoice with `meter_new > 0` |
+| Non-metered product selected | Meter columns hidden via `invisible="not product_is_metered"` | Ensure product has **Is Metered** checked |
 
 ## Configuration
 
-**No model-based configuration or system parameters are required.**
+**System parameters:** None.
 
-The module has zero configuration options. All behavior is governed by the
-field compute logic described in the Model section. There are no
-`res.config.settings` entries, no `ir.config_parameter` keys, and no
-environment variables.
+**Model-based configuration:**
 
-## Sandbox Testing
+| Model | Field | Description |
+|---|---|---|
+| `product.template` | `is_metered` | Enable meter columns on invoice lines for this product |
 
-Not applicable. The module contains no sandbox, mock server, or external
-service simulator. All logic runs entirely within the Odoo ORM layer.
+Enable **Is Metered** on each product that represents a utility service
+(Water, Electricity, Gas, etc.). Products without this flag behave as
+standard Odoo products with no meter columns visible.
 
 ## Security
 
 | Layer | Mechanism |
-|---|---|---|
+|---|---|
 | Field access | Standard Odoo ACLs apply. No custom rules. Fields visible to users with `account.move.line` access |
 | Data isolation | `meter_previous` search respects the same record rules as `account.move.line` |
 
@@ -232,7 +362,8 @@ inherits the existing `account` module's security posture.
 
 | Module | Purpose |
 |---|---|
-| `account` | Provides the `account.move.line` model and invoice views that this module extends |
+| `account_accountant` | Provides the full Accounting module with invoice management |
+| `product` | Provides `product.template` model for the `is_metered` flag |
 
 No external Python packages are required.
 
@@ -244,9 +375,11 @@ account_meter_billing/
 ├── __manifest__.py
 ├── models/
 │   ├── __init__.py
-│   └── account_move_line.py
+│   ├── account_move_line.py
+│   └── product_template.py
 └── views/
     ├── account_move_views.xml
+    ├── product_views.xml
     └── report_invoice.xml
 ```
 
@@ -265,24 +398,37 @@ cp -r account_meter_billing /path/to/odoo/addons/
 # 3. Search "Account Meter Billing" > Install
 ```
 
-## Performance Characteristics
-
-| Metric | Typical Value |
-|---|---|
-| Extra storage per invoice line | 3 x `Float` (24 bytes each, plus ORM overhead) |
-| `_compute_meter_previous` latency | < 5ms per line (single indexed search with `limit=1`) |
-| `_compute_meter_actual` latency | < 1ms per line (pure arithmetic, no I/O) |
-| Bulk invoice creation | Each line triggers one search query; no batching optimization |
-
-**Bottlenecks:** The `_compute_meter_previous` method issues one `search()`
-call per invoice line. For import scripts creating thousands of lines at once,
-this can add up. Future optimization could batch the lookup in a single query.
-
 ## Development & Testing
 
+This project runs Odoo 19 inside a Docker container. The module is mounted
+from the host `custom_addons/` directory into `/mnt/custom-addons` inside the
+container.
+
+**Docker services:**
+
+| Service | Container name | Port |
+|---|---|---|
+| Odoo 19 | `mobipine19_odoo_platform` | `8769` (maps to container 8069) |
+| PostgreSQL 16 | `mobipine19_postgres_database` | -- |
+
+**Upgrade the module after code changes:**
+
 ```bash
-# Run module tests (if tests/ directory exists)
-./odoo-bin -d <database> --test-tags account_meter_billing --stop-after-init
+docker exec mobipine19_odoo_platform \
+  odoo-bin -d mobipine19 -u account_meter_billing --stop-after-init
+```
+
+**Check server logs:**
+
+```bash
+docker logs mobipine19_odoo_platform -f
+```
+
+**Run module tests (when test files exist):**
+
+```bash
+docker exec mobipine19_odoo_platform \
+  odoo-bin -d mobipine19 --test-tags account_meter_billing --stop-after-init
 ```
 
 | File | Coverage | Notes |
@@ -295,8 +441,8 @@ this can add up. Future optimization could batch the lookup in a single query.
 - The `meter_previous` field does not retroactively update when an older
   invoice is posted after a newer one already exists. Create invoices in
   chronological order.
-- Negative consumption (`meter_new < meter_previous`) is silently floored to
-  zero rather than raising a warning.
+- The `_check_meter_readings` constraint only triggers on save; inline
+  recomputation via `onchange` is not overridden.
 
 ## Troubleshooting
 
@@ -304,6 +450,8 @@ this can add up. Future optimization could batch the lookup in a single query.
 |---|---|---|
 | `meter_previous` stays 0 | No prior posted invoice for this partner+product | Post prior invoice, re-save current line |
 | `meter_actual` is 0 unexpectedly | `meter_new` <= `meter_previous` | Verify reading. Create zeroing invoice with prior `meter_new` if reset |
+| Validation error on save | `meter_new` < `meter_previous` | Enter a reading higher than or equal to Previous |
+| Meter columns not visible | Product missing **Is Metered** flag | Edit product, check **Is Metered** |
 | `Quantity` shows wrong value | Compute overwrites manual `quantity` edits | Edit `meter_new` instead |
 | PDF columns missing | Another module modifies same report template | Check `ir.ui.view` inheritance order in debug mode |
 
