@@ -16,7 +16,6 @@ charges are based on meter differential rather than discrete units.
 - [Architecture & Design Decisions](#architecture--design-decisions)
 - [Complete Processing Flow](#complete-processing-flow)
 - [Model / Audit Log](#model--audit-log)
-- [Error Scenarios & Recovery](#error-scenarios--recovery)
 - [Configuration](#configuration)
 - [Security](#security)
 - [Dependencies](#dependencies)
@@ -47,24 +46,24 @@ in a chain of readings for that partner-product pair.
 
 ### First invoice -- baseline reading
 
-![First invoice - baseline reading with Previous=0 and New=1250](assets/screenshots/invoice_first.png)
+![First invoice - baseline reading with Previous=0 and New=1250](assets/screenshots/first_invoice.png)
 
 *No prior reading exists, so Previous = 0.00. New = 1250.00 produces
 Actual = 1250.00, Quantity = 1250.00, Subtotal = 4,375.00.*
 
 ### Second invoice -- automatic Previous fetch
 
-![Second invoice - Previous auto-populated from INV-001](assets/screenshots/invoice_second.png)
+![Second invoice - Previous auto-populated from INV-001](assets/screenshots/second_invoice.png)
 
 *Previous auto-populated to 1250.00 (from INV-001). New = 1380.00 produces
 Actual = 130.00, Quantity = 130.00, Subtotal = 455.00.*
 
-### Multi-product isolation
+### Is Metered product flag
 
-![Third invoice - Water and Electricity tracking independent readings](assets/screenshots/invoice_multi_product.png)
+![is_metered checkbox on the product form](assets/screenshots/is_metered.png)
 
-*Each product tracks its own reading chain. Electricity has no prior invoice
-so Previous = 0.00, isolated from Water's history.*
+*Enable meter columns per product by checking **Is Metered** on the product
+form under the General Information tab.*
 
 ## Quick Start
 
@@ -306,17 +305,6 @@ Steps:
 | Field | Type | Purpose |
 |---|---|---|
 | `is_metered` | `Boolean` | When checked, invoice lines for this product show meter reading columns |
-
-## Error Scenarios & Recovery
-
-| Scenario | What happens | Recovery |
-|---|---|---|
-| No prior invoice exists | `meter_previous` = 0.0; `meter_actual` = `meter_new` | Correct -- first invoice has no prior |
-| `meter_new` < `meter_previous` | `_check_meter_readings` raises `ValidationError` on save | Verify the reading. If meter was reset, zero `meter_previous` via a prior invoice |
-| Prior invoice in draft | `meter_previous` = 0.0 (needs `state=posted`) | Post prior invoice, re-save current line |
-| Same product, diff move_type | `move_type` filter prevents vendor bills leaking into customer invoices | No action needed |
-| Invoice line deleted after posting | Deleted line unavailable as prior source | Keep one posted invoice with `meter_new > 0` |
-| Non-metered product selected | Meter columns hidden via `invisible="not product_is_metered"` | Ensure product has **Is Metered** checked |
 
 ## Configuration
 
