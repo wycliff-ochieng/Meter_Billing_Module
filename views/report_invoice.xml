@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <template id="report_invoice_document_inherit_meter"
+              inherit_id="account.report_invoice_document">
+        <xpath expr="//th[@name='th_quantity']" position="before">
+            <th name="th_meter_previous" class="text-end">
+                <span>Previous</span>
+            </th>
+            <th name="th_meter_new" class="text-end">
+                <span>New</span>
+            </th>
+            <th name="th_meter_actual" class="text-end">
+                <span>Actual</span>
+            </th>
+        </xpath>
+        <xpath expr="//td[@name='td_quantity']" position="before">
+            <td class="text-end">
+                <span t-field="line.meter_previous"/>
+            </td>
+            <td class="text-end">
+                <span t-field="line.meter_new"/>
+            </td>
+            <td class="text-end">
+                <span t-field="line.meter_actual"/>
+            </td>
+        </xpath>
+    </template>
+</odoo>
